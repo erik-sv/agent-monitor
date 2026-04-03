@@ -1,32 +1,98 @@
 # agent-monitor
 
-A cron-driven framework for monitoring GitHub repositories using Claude as a triage agent. Each monitor defines what to watch and how to assess materiality. The framework handles state tracking, deduplication, cost-efficient pre-checks, optional deep-dive sub-agent reviews, and Discord notifications.
+A cron-driven framework for monitoring GitHub repositories using Claude as a triage agent. Define what to watch and what matters. The framework handles state tracking, deduplication, pre-flight cost gating, optional deep-dive sub-agent reviews, and Discord notifications.
+
+## Why
+
+A standards working group publishes 30 PRs a week across three repos. Five of those touch your active proposal. You find out two days late because you were heads-down on implementation, and now the comment window has closed.
+
+That is the problem. Manual "check GitHub every few hours" does not scale past a handful of repos, and GitHub's built-in notifications are a firehose with no materiality filter. You get pinged for bot comments, CI status, and dependency bumps alongside the PR that conflicts with your architecture.
+
+agent-monitor replaces that routine with a cron job. Every few hours, it checks your tracked repos, asks Claude to assess what actually matters given your context, and sends you a Discord message with only the items that need your attention. It tracks what it has already reported, so you never see the same item twice unless something changed.
+
+### Time savings
+
+The manual version of this workflow takes 10-20 minutes per check: open each repo, scan recent PRs, read the ones that look relevant, decide if action is needed. At three checks per day across a handful of repos, that is 30-60 minutes of context-switching overhead. agent-monitor compresses that into a Discord notification you read in 30 seconds. The monitors run in the background while you work.
+
+### API cost
+
+Most cron ticks cost nothing. The pre-check script queries the GitHub API directly and short-circuits before invoking Claude when nothing has changed. In practice, roughly 80-90% of runs exit at the pre-check stage. When the LLM does run, a single Sonnet triage call typically costs $0.01-0.03. A monitor checking every 4 hours costs under $2/month.
 
 ## How it works
 
-```
-cron tick
-  |
-  v
-pre-check.sh (cheap API query: anything new?)
-  |
-  no --> exit (zero LLM cost)
-  yes
-  |
-  v
-Phase 1: Sonnet triage (reads GitHub, writes report + delta.json)
-  |
-  v
-State merge (delta.json -> seen-items.json for dedup)
-  |
-  v
-Phase 2 (optional): parallel sub-agent reviews for HIGH items
-  |
-  v
-Discord webhook notification
+```mermaid
+flowchart TD
+    A["Cron tick"] --> B{"pre-check.sh
+    (cheap API query)"}
+    B -- "nothing new" --> C["Exit
+    zero LLM cost"]
+    B -- "changes found" --> D["Phase 1: Sonnet triage
+    reads GitHub, writes report + delta"]
+    D --> E["State merge
+    delta.json → seen-items.json"]
+    E --> F{"REVIEW_PROMPT.md
+    exists?"}
+    F -- "no" --> H
+    F -- "yes + HIGH items" --> G["Phase 2: parallel sub-agent reviews
+    one agent per HIGH item"]
+    G --> H["Discord webhook
+    notification"]
+
+    style C fill:#2d333b,stroke:#444,color:#8b949e
+    style D fill:#1a3a2a,stroke:#3fb950,color:#3fb950
+    style G fill:#1a2a3a,stroke:#58a6ff,color:#58a6ff
+    style H fill:#3a2a1a,stroke:#d29922,color:#d29922
 ```
 
-Each cron tick costs nothing when there is no new activity. The pre-check script queries the GitHub API directly and short-circuits before invoking Claude.
+## Sample output
+
+<details>
+<summary>Example Discord notification</summary>
+
+```json
+{
+  "embeds": [{
+    "title": "Security Advisories: 2 items need attention",
+    "description": "new [facebook/react#28234](https://github.com/facebook/react/pull/28234) -- fix: XSS in dangerouslySetInnerHTML sanitizer (ghsa-bot)\n**What:** Critical sanitization bypass in React DOM server rendering\n**Do:** Check if your SSR output uses dangerouslySetInnerHTML with user input\n\nnew [vercel/next.js#61234](https://github.com/vercel/next.js/pull/61234) -- fix: path traversal in image optimization (styfle)\n**What:** Unauthenticated path traversal via crafted image URL\n**Do:** Upgrade next.js if running < 14.1.2\n",
+    "color": 15158332,
+    "footer": {"text": "security-advisories | 2026-04-03 | 0 reviews"}
+  }]
+}
+```
+
+</details>
+
+<details>
+<summary>Example triage report (markdown)</summary>
+
+```markdown
+# Security Advisories Report - 2026-04-03
+
+**Period:** 2026-04-03T02:00:00Z to now
+**Items found:** 2 new security-relevant items
+
+## HIGH
+
+### facebook/react#28234 - fix: XSS in dangerouslySetInnerHTML sanitizer (ghsa-bot)
+**What happened:** Security advisory published for React DOM. A crafted
+HTML string can bypass the sanitizer when rendered server-side.
+**Context:** CVE-2026-XXXX, CVSS 8.1. Affects react-dom >= 18.0.0.
+**Action:** Audit SSR code paths for dangerouslySetInnerHTML usage with
+user-controlled input. Upgrade to react-dom 18.2.1+ when released.
+
+### vercel/next.js#61234 - fix: path traversal in image optimization (styfle)
+**What happened:** Unauthenticated path traversal via /_next/image endpoint.
+Attacker can read arbitrary files on the server.
+**Context:** Affects Next.js < 14.1.2 with default image optimization enabled.
+**Action:** Upgrade immediately if running affected version in production.
+
+## Summary
+
+- 2 high items, 0 medium items
+- Key actions: audit React SSR sanitization, upgrade Next.js
+```
+
+</details>
 
 ## Requirements
 
@@ -46,8 +112,8 @@ cd agent-monitor
 cp .env.example .env
 # Edit .env with your Discord webhook URL
 
-# 3. Create a monitor from the example
-cp -r monitors/example monitors/my-project
+# 3. Pick a monitor (or create your own from the example)
+cp -r monitors/security-advisories monitors/my-project
 # Edit monitors/my-project/monitor.conf, PROMPT.md, and pre-check.sh
 
 # 4. Run manually
@@ -57,6 +123,16 @@ cp -r monitors/example monitors/my-project
 crontab -e
 # 15 */4 * * *  /path/to/agent-monitor/cron-wrapper.sh my-project
 ```
+
+## Included monitors
+
+| Monitor | What it watches | Suggested schedule |
+|---------|----------------|-------------------|
+| [`example`](monitors/example/) | Generic repo watcher template. Copy and customize. | - |
+| [`security-advisories`](monitors/security-advisories/) | Security-related PRs and issues across repos you depend on. | Every 4 hours |
+| [`release-tracker`](monitors/release-tracker/) | New releases and tags on upstream dependencies. | Twice daily |
+
+Each monitor is a self-contained directory you can copy, edit, and run independently.
 
 ## Creating a monitor
 
@@ -102,7 +178,11 @@ State lives in `state/<monitor-name>/`:
 - **`last-check.txt`** records when the monitor last ran. The next run queries only activity after this timestamp.
 - **`delta.json`** (transient) holds newly reported items from the current run, then merges into `seen-items.json`.
 
-The pre-check script runs before the LLM and exits early when no items have been updated since `last-check.txt`. This is the primary cost-saving mechanism.
+Three layers of deduplication work together:
+
+1. **Shell-level gate** (`pre-check.sh`): queries the GitHub API before the LLM runs. If nothing has changed since `last-check.txt`, the run exits immediately. No API credits spent.
+2. **LLM-level dedup**: the triage prompt receives `seen-items.json` and skips items whose `updatedAt` matches `lastReportedUpdate`. Items only resurface when something new happens.
+3. **Delta merge**: after triage, `delta.json` folds into `seen-items.json` so the next run knows what was already reported.
 
 ## CLI flags
 
@@ -131,7 +211,7 @@ Global settings go in `.env` at the repo root. Per-monitor overrides go in `moni
 
 Two notification modes are supported:
 
-1. **LLM-generated payload:** The triage prompt writes a Discord-ready JSON file directly. Best for monitors where the LLM should control formatting (e.g. a GitHub activity monitor with urgency tiers).
+1. **LLM-generated payload:** The triage prompt writes a Discord-ready JSON file directly. Best for monitors where the LLM should control formatting and urgency tiers.
 
 2. **Shell-built embed:** The framework reads `delta.json` and builds a Discord embed from HIGH items, appending review findings and dashboard links. Best for monitors with structured delta output and Phase 2 reviews.
 

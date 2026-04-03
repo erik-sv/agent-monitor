@@ -2,11 +2,12 @@
 # Modular agent monitor - runs a named monitor's triage + optional review + Discord notify.
 #
 # Usage:
-#   ./run.sh <monitor-name> [--lookback] [--reset] [--no-review]
+#   ./run.sh <monitor-name> [--lookback] [--reset] [--no-review] [--anomaly]
 #
 # Each monitor lives in monitors/<name>/ with:
 #   monitor.conf       - shell variables (LOOKBACK_HOURS, DISCORD_EMBED_COLOR, etc.)
 #   PROMPT.md           - triage agent prompt
+#   ANOMALY_PROMPT.md   - (optional) alternate prompt for --anomaly mode
 #   REVIEW_PROMPT.md    - (optional) per-item review prompt; enables Phase 2
 #   pre-check.sh        - (optional) cheap API check; skips LLM when nothing changed
 #   .env                - (optional) per-monitor env overrides
@@ -18,19 +19,28 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 # -- Parse arguments ----------------------------------------------------------
-MONITOR_NAME="${1:?Usage: $0 <monitor-name> [--lookback] [--reset] [--no-review]}"
+MONITOR_NAME="${1:?Usage: $0 <monitor-name> [--lookback] [--reset] [--no-review] [--anomaly]}"
 shift
 
 LOOKBACK=false
 RESET=false
 NO_REVIEW=false
+ANOMALY=false
 for arg in "$@"; do
   case "$arg" in
-    --lookback) LOOKBACK=true ;;
-    --reset)    RESET=true ;;
+    --lookback)  LOOKBACK=true ;;
+    --reset)     RESET=true ;;
     --no-review) NO_REVIEW=true ;;
+    --anomaly)   ANOMALY=true ;;
   esac
 done
+
+# Export mode for pre-check scripts and source collectors
+if [ "$ANOMALY" = true ]; then
+  export MONITOR_MODE="anomaly"
+else
+  export MONITOR_MODE="weekly"
+fi
 
 # -- Resolve paths ------------------------------------------------------------
 MONITOR_DIR="$SCRIPT_DIR/monitors/$MONITOR_NAME"
@@ -58,6 +68,7 @@ MONITOR_DISPLAY_NAME="$MONITOR_NAME"
 source "$MONITOR_DIR/monitor.conf"
 
 # -- Init ---------------------------------------------------------------------
+export RUN_START_EPOCH=$(date +%s)
 load_env
 check_prereqs
 init_state
@@ -114,27 +125,41 @@ if [ "$NO_REVIEW" = false ] && [ -f "$MONITOR_DIR/REVIEW_PROMPT.md" ] \
     PIDS=(); REVIEW_FILES=(); SESSION_OUTPUTS=(); ITEM_KEYS=()
 
     REVIEW_MODEL="${REVIEW_MODEL:-claude-sonnet-4-6}"
+    MERGED_DATA="$STATE_DIR/sources/merged.json"
 
     while IFS= read -r ITEM_KEY; do
-      REPO="${ITEM_KEY%#*}"
-      NUMBER="${ITEM_KEY##*#}"
-      SAFE_KEY=$(echo "$ITEM_KEY" | tr '/#' '-')
+      SAFE_KEY=$(echo "$ITEM_KEY" | tr '/#:' '---')
       REVIEW_FILE="$REVIEWS_DIR/review-${SAFE_KEY}-$(date +%Y%m%d).md"
       SESSION_OUTPUT="$REVIEWS_DIR/.session-${SAFE_KEY}.json"
 
-      ITEM_TYPE="pr"
-      GH_CMD="pr view"
-      if ! gh pr view "$NUMBER" --repo "$REPO" --json number > /dev/null 2>&1; then
-        ITEM_TYPE="issue"; GH_CMD="issue view"
-      fi
+      # Extract item metadata from delta for prompt interpolation
+      ITEM_TYPE=$(jq -r --arg k "$ITEM_KEY" '.[$k].type // "insight"' "$DELTA_FILE" 2>/dev/null)
+      ITEM_SUMMARY=$(jq -r --arg k "$ITEM_KEY" '.[$k].title // .[$k].summary // ""' "$DELTA_FILE" 2>/dev/null)
 
+      # Build review prompt with all available interpolations
       REVIEW_PROMPT="$(sed \
-        -e "s|ITEM_REPO|$REPO|g" \
-        -e "s|ITEM_NUMBER|$NUMBER|g" \
+        -e "s|ITEM_KEY|$ITEM_KEY|g" \
         -e "s|ITEM_TYPE|$ITEM_TYPE|g" \
-        -e "s|ITEM_GH_CMD|$GH_CMD|g" \
+        -e "s|ITEM_SUMMARY|$ITEM_SUMMARY|g" \
         -e "s|REVIEW_OUTPUT_PATH|$REVIEW_FILE|g" \
+        -e "s|MERGED_DATA_PATH|$MERGED_DATA|g" \
         "$MONITOR_DIR/REVIEW_PROMPT.md")"
+
+      # For GitHub-style monitors: also interpolate repo/number if key matches repo#N
+      if [[ "$ITEM_KEY" == *"#"* ]]; then
+        REPO="${ITEM_KEY%#*}"
+        NUMBER="${ITEM_KEY##*#}"
+        GH_TYPE="pr"
+        GH_CMD="pr view"
+        if ! gh pr view "$NUMBER" --repo "$REPO" --json number > /dev/null 2>&1; then
+          GH_TYPE="issue"; GH_CMD="issue view"
+        fi
+        REVIEW_PROMPT="$(echo "$REVIEW_PROMPT" | sed \
+          -e "s|ITEM_REPO|$REPO|g" \
+          -e "s|ITEM_NUMBER|$NUMBER|g" \
+          -e "s|ITEM_GH_CMD|$GH_CMD|g")"
+        ITEM_TYPE="$GH_TYPE"
+      fi
 
       log "  Spawning review: $ITEM_KEY ($ITEM_TYPE)"
 
@@ -258,6 +283,26 @@ if [ -n "${DISCORD_WEBHOOK_URL:-}" ]; then
   else
     log "No material items, skipping Discord notification."
   fi
+fi
+
+# =============================================================================
+# AgentDesk webhook (if configured)
+# =============================================================================
+if [ -n "${AGENTDESK_WEBHOOK_URL:-}" ] && [ -n "${AGENTDESK_WEBHOOK_TOKEN:-}" ]; then
+  # Build findings array from delta
+  FINDINGS_JSON="[]"
+  if [ -f "$DELTA_FILE" ] && [ -s "$DELTA_FILE" ]; then
+    FINDINGS_JSON=$(jq '[to_entries[] | {key: .key, severity: (.value.relevance // "LOW"), title: (.value.title // .key), summary: (.value.summary // ""), source: (.value.source // ""), action: (.value.action // "")}]' "$DELTA_FILE" 2>/dev/null || echo "[]")
+  fi
+
+  # Build source results from collected data (marketing-intel specific)
+  SOURCE_RESULTS="{}"
+  MERGED_FILE="$STATE_DIR/sources/merged.json"
+  if [ -f "$MERGED_FILE" ] && [ -s "$MERGED_FILE" ]; then
+    SOURCE_RESULTS=$(jq '[.[] | {key: .source, value: (if .error then .error else "ok" end)}] | from_entries' "$MERGED_FILE" 2>/dev/null || echo "{}")
+  fi
+
+  send_agentdesk_webhook "success" "$FINDINGS_JSON" "$SOURCE_RESULTS"
 fi
 
 rm -f "$DELTA_FILE"

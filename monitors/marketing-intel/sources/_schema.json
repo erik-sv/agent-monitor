@@ -1,0 +1,94 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Marketing Intel Source Output",
+  "description": "Standardized output format that every source plugin must produce. Each source outputs a JSON object with metadata and a data section containing metrics, trends, and anomalies.",
+  "type": "object",
+  "required": ["source", "domain", "mode", "period", "collected_at", "data"],
+  "properties": {
+    "source": {
+      "type": "string",
+      "description": "Source identifier matching the filename without extension (e.g. 'ga4', 'gsc', 'zoho_salesiq')"
+    },
+    "domain": {
+      "type": "string",
+      "description": "Domain being analyzed (e.g. 'encypher.com')"
+    },
+    "mode": {
+      "type": "string",
+      "enum": ["weekly", "anomaly"],
+      "description": "Collection mode: 'weekly' for full report data, 'anomaly' for change-detection only"
+    },
+    "period": {
+      "type": "object",
+      "required": ["start", "end"],
+      "properties": {
+        "start": { "type": "string", "format": "date", "description": "ISO date, start of reporting window" },
+        "end": { "type": "string", "format": "date", "description": "ISO date, end of reporting window" },
+        "comparison_start": { "type": "string", "format": "date", "description": "ISO date, start of comparison window (previous period)" },
+        "comparison_end": { "type": "string", "format": "date", "description": "ISO date, end of comparison window" }
+      }
+    },
+    "collected_at": {
+      "type": "string",
+      "format": "date-time",
+      "description": "ISO 8601 timestamp when this data was collected"
+    },
+    "error": {
+      "type": "string",
+      "description": "If the source failed to collect data, describe the error here. Data section may be empty or partial."
+    },
+    "data": {
+      "type": "object",
+      "description": "Source-specific data payload. Structure varies by source but should include the sections relevant to the source type.",
+      "properties": {
+        "summary": {
+          "type": "object",
+          "description": "High-level metrics for the period with period-over-period deltas",
+          "additionalProperties": {
+            "type": "object",
+            "properties": {
+              "current": { "type": "number" },
+              "previous": { "type": "number" },
+              "change_pct": { "type": "number", "description": "Percentage change from previous to current" }
+            }
+          }
+        },
+        "top_items": {
+          "type": "array",
+          "description": "Top N items by the source's primary metric (pages, queries, campaigns, etc.)",
+          "items": { "type": "object" }
+        },
+        "trends": {
+          "type": "array",
+          "description": "Notable trends: items gaining or losing momentum",
+          "items": {
+            "type": "object",
+            "properties": {
+              "item": { "type": "string" },
+              "direction": { "type": "string", "enum": ["rising", "falling", "new", "gone"] },
+              "metric": { "type": "string" },
+              "current_value": { "type": "number" },
+              "previous_value": { "type": "number" },
+              "change_pct": { "type": "number" }
+            }
+          }
+        },
+        "anomalies": {
+          "type": "array",
+          "description": "Statistically significant deviations from expected values",
+          "items": {
+            "type": "object",
+            "properties": {
+              "metric": { "type": "string" },
+              "dimension": { "type": "string", "description": "What the anomaly applies to (page, query, campaign, etc.)" },
+              "expected": { "type": "number" },
+              "actual": { "type": "number" },
+              "deviation_pct": { "type": "number" },
+              "severity": { "type": "string", "enum": ["low", "medium", "high"] }
+            }
+          }
+        }
+      }
+    }
+  }
+}

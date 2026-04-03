@@ -3,3 +3,8 @@ monitors/*/.env
 state/
 logs/
 *.lock
+__pycache__/
+*.pyc
+PRDs/
+.teams/
+.questions/

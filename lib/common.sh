@@ -76,11 +76,17 @@ save_timestamp() {
 # Run the triage agent with the monitor's PROMPT.md.
 # Sets SESSION_ID on success.
 run_triage() {
+  # Use ANOMALY_PROMPT.md when in anomaly mode, fall back to PROMPT.md
   local prompt_file="$MONITOR_DIR/PROMPT.md"
+  if [ "${MONITOR_MODE:-weekly}" = "anomaly" ] && [ -f "$MONITOR_DIR/ANOMALY_PROMPT.md" ]; then
+    prompt_file="$MONITOR_DIR/ANOMALY_PROMPT.md"
+    log "Using anomaly prompt."
+  fi
   local seen_items
   seen_items="$(cat "$SEEN_FILE")"
 
   # Interpolate standard variables into the prompt
+  local merged_data_path="$STATE_DIR/sources/merged.json"
   local prompt
   prompt="$(sed \
     -e "s|LAST_CHECK_TIME|$LAST_CHECK|g" \
@@ -88,6 +94,9 @@ run_triage() {
     -e "s|REPORT_OUTPUT_PATH|$REPORT_FILE|g" \
     -e "s|DELTA_OUTPUT_PATH|$DELTA_FILE|g" \
     -e "s|DISCORD_OUTPUT_PATH|$DISCORD_FILE|g" \
+    -e "s|MERGED_DATA_PATH|$merged_data_path|g" \
+    -e "s|PERIOD_START|$LAST_CHECK|g" \
+    -e "s|PERIOD_END|$NOW|g" \
     -e "s|DATE|$TODAY|g" \
     "$prompt_file")"
 
@@ -189,5 +198,56 @@ prune_logs() {
   ls -t "$LOGS_DIR"/report-*.md 2>/dev/null | tail -n +"$((keep + 1))" | xargs -r rm -f
   if [ -d "$LOGS_DIR/reviews" ]; then
     ls -t "$LOGS_DIR"/reviews/review-*.md 2>/dev/null | tail -n +"$((keep + 1))" | xargs -r rm -f
+  fi
+}
+
+# Post run results to AgentDesk webhook if configured.
+# Env vars: AGENTDESK_WEBHOOK_URL, AGENTDESK_WEBHOOK_TOKEN
+send_agentdesk_webhook() {
+  local status="$1"
+  local findings_json="${2:-[]}"
+  local source_results="${3:-{}}"
+
+  if [ -z "${AGENTDESK_WEBHOOK_URL:-}" ] || [ -z "${AGENTDESK_WEBHOOK_TOKEN:-}" ]; then
+    return 0
+  fi
+
+  local duration=0
+  if [ -n "${RUN_START_EPOCH:-}" ]; then
+    duration=$(( $(date +%s) - RUN_START_EPOCH ))
+  fi
+
+  local summary_json
+  summary_json=$(jq -n \
+    --argjson findings "$(echo "$findings_json" | jq 'length')" \
+    --argjson high "$(echo "$findings_json" | jq '[.[] | select(.severity == "HIGH" or .relevance == "HIGH")] | length')" \
+    --arg sources_ok "$(echo "$source_results" | jq '[to_entries[] | select(.value == "ok")] | length')" \
+    --arg sources_failed "$(echo "$source_results" | jq '[to_entries[] | select(.value != "ok")] | length')" \
+    '{findings: $findings, high_findings: $high, sources_ok: ($sources_ok|tonumber), sources_failed: ($sources_failed|tonumber)}')
+
+  local payload
+  payload=$(jq -n \
+    --arg mode "${MONITOR_MODE:-weekly}" \
+    --arg status "$status" \
+    --argjson duration "$duration" \
+    --argjson summary "$summary_json" \
+    --argjson findings "$findings_json" \
+    --arg reportPath "${REPORT_FILE:-}" \
+    --arg sessionId "${SESSION_ID:-}" \
+    --argjson sourceResults "$source_results" \
+    '{mode: $mode, status: $status, duration: $duration, summary: $summary, findings: $findings, reportPath: $reportPath, sessionId: $sessionId, sourceResults: $sourceResults}')
+
+  local url="${AGENTDESK_WEBHOOK_URL}/api/monitors/webhook/${MONITOR_NAME}"
+  local http_code
+  http_code=$(curl -s -o /dev/null -w "%{http_code}" \
+    -H "Content-Type: application/json" \
+    -H "Authorization: Bearer ${AGENTDESK_WEBHOOK_TOKEN}" \
+    -d "$payload" \
+    "$url")
+
+  if [ "$http_code" = "201" ]; then
+    log "AgentDesk webhook: sent (HTTP $http_code)"
+  else
+    log "WARNING: AgentDesk webhook failed (HTTP $http_code)"
   fi
 }

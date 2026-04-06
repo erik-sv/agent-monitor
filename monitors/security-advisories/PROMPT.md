@@ -37,6 +37,10 @@ For each item that passes the security filter, fetch full details:
 ```bash
 gh pr view NUMBER --repo OWNER/REPO --comments 2>/dev/null \
   || gh issue view NUMBER --repo OWNER/REPO --comments
+
+# Inline review comments (attached to specific code lines)
+gh api repos/OWNER/REPO/pulls/NUMBER/comments \
+  --jq '.[] | {user: .user.login, path: .path, body: .body, created_at: .created_at}'
 ```
 
 ## Security materiality criteria

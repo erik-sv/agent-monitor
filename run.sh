@@ -79,7 +79,7 @@ get_check_window
 PRECHECK_SCRIPT="$MONITOR_DIR/pre-check.sh"
 if [ -f "$PRECHECK_SCRIPT" ] && [ "$LOOKBACK" = false ] && [ "$RESET" = false ]; then
   log "Running pre-check..."
-  PRECHECK_OUTPUT=$("$PRECHECK_SCRIPT" 2>&1) && PRECHECK_RC=0 || PRECHECK_RC=$?
+  PRECHECK_OUTPUT=$(source "$PRECHECK_SCRIPT" 2>&1) && PRECHECK_RC=0 || PRECHECK_RC=$?
   if [ "$PRECHECK_RC" -ne 0 ]; then
     save_timestamp
     log "Pre-check: no new activity ($PRECHECK_OUTPUT items). Skipping triage."

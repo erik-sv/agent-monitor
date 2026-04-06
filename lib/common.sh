@@ -100,7 +100,7 @@ run_triage() {
     -e "s|DATE|$TODAY|g" \
     "$prompt_file")"
 
-  prompt="$(echo "$prompt" | sed "s|SEEN_ITEMS_JSON|$seen_items|")"
+  prompt="${prompt//SEEN_ITEMS_JSON/$seen_items}"
 
   # Append previously reported items if not already embedded in the prompt
   if ! grep -q 'Previously reported items' "$prompt_file"; then

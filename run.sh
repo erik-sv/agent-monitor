@@ -80,12 +80,18 @@ PRECHECK_SCRIPT="$MONITOR_DIR/pre-check.sh"
 if [ -f "$PRECHECK_SCRIPT" ] && [ "$LOOKBACK" = false ] && [ "$RESET" = false ]; then
   log "Running pre-check..."
   PRECHECK_OUTPUT=$(source "$PRECHECK_SCRIPT" 2>&1) && PRECHECK_RC=0 || PRECHECK_RC=$?
-  if [ "$PRECHECK_RC" -ne 0 ]; then
+  if [ "$PRECHECK_RC" -eq 1 ] && [[ "$PRECHECK_OUTPUT" =~ ^[0-9]+$ ]]; then
+    # Clean exit with numeric output: no changes found
     save_timestamp
     log "Pre-check: no new activity ($PRECHECK_OUTPUT items). Skipping triage."
     exit 0
+  elif [ "$PRECHECK_RC" -gt 1 ] || ! [[ "$PRECHECK_OUTPUT" =~ ^[0-9]+$ ]]; then
+    # Crash or non-numeric output: log warning and proceed with triage
+    log "WARNING: pre-check failed (exit $PRECHECK_RC), proceeding with triage."
+    log "  Output: $PRECHECK_OUTPUT"
+  else
+    log "Pre-check: $PRECHECK_OUTPUT changed items detected."
   fi
-  log "Pre-check: $PRECHECK_OUTPUT changed items detected."
 fi
 
 # =============================================================================

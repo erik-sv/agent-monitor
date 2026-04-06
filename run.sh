@@ -258,8 +258,8 @@ if [ -n "${DISCORD_WEBHOOK_URL:-}" ]; then
       SAFE_KEY=$(echo "$ITEM_KEY" | tr '/#' '-')
       REVIEW_FILE="$REVIEWS_DIR/review-${SAFE_KEY}-$(date +%Y%m%d).md"
       if [ -f "$REVIEW_FILE" ]; then
-        SUMMARY_RAW=$(grep '^\*\*Summary:\*\*' "$REVIEW_FILE" | sed 's/\*\*Summary:\*\* *//' | head -c 140)
-        ACTION_TYPE=$(grep '^\*\*Recommended action:\*\*' "$REVIEW_FILE" | sed 's/\*\*Recommended action:\*\* *//' | head -c 200)
+        SUMMARY_RAW=$(grep '^\*\*Summary:\*\*' "$REVIEW_FILE" | sed 's/\*\*Summary:\*\* *//' | head -c 140 || true)
+        ACTION_TYPE=$(grep '^\*\*Recommended action:\*\*' "$REVIEW_FILE" | sed 's/\*\*Recommended action:\*\* *//' | head -c 200 || true)
         [ -n "$SUMMARY_RAW" ] && DESC="${DESC}**Finding:** ${SUMMARY_RAW}
 "
         [ -n "$ACTION_TYPE" ] && DESC="${DESC}**Action:** ${ACTION_TYPE}

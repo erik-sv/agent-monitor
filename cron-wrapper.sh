@@ -15,4 +15,14 @@ LOG_DIR="$SCRIPT_DIR/logs/$MONITOR"
 mkdir -p "$LOG_DIR"
 
 export PATH="$HOME/.local/bin:/usr/local/bin:/usr/bin:/bin:$PATH"
+
+# Source AgentDesk webhook credentials for run phase reporting.
+# Expected keys: AGENTDESK_WEBHOOK_URL, AGENTDESK_WEBHOOK_TOKEN
+if [ -f "$SCRIPT_DIR/.env.agentdesk" ]; then
+  set -a
+  # shellcheck source=/dev/null
+  source "$SCRIPT_DIR/.env.agentdesk"
+  set +a
+fi
+
 exec "$SCRIPT_DIR/run.sh" "$MONITOR" "$@" >> "$LOG_DIR/cron.log" 2>&1

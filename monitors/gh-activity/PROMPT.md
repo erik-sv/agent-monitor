@@ -22,8 +22,12 @@ gh api 'search/issues?q=involves:erik-sv+updated:>LAST_CHECK_DATE&sort=updated&p
 For each item that passes the materiality filter below, fetch details:
 
 ```bash
-# PR or issue details + recent comments
+# PR or issue details + general comments
 gh pr view NUMBER --repo OWNER/REPO --comments 2>/dev/null || gh issue view NUMBER --repo OWNER/REPO --comments
+
+# Inline review comments (attached to specific code lines - often the most substantive feedback)
+gh api repos/OWNER/REPO/pulls/NUMBER/comments \
+  --jq '.[] | {user: .user.login, path: .path, body: .body, created_at: .created_at}'
 ```
 
 ## Materiality criteria

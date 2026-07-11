@@ -53,7 +53,16 @@ You will receive a "Previously reported items" section at the end of this prompt
 - Changes to text or HTML handling in c2pa-rs
 - Any new issues or PRs on encypherai/c2pa-text
 
-For HIGH items, run `gh pr view NUMBER --repo REPO` or `gh issue view NUMBER --repo REPO` to read description and assess impact.
+For HIGH items, read both the description AND all review comments:
+
+```bash
+# Description and general comments
+gh pr view NUMBER --repo REPO --comments 2>/dev/null || gh issue view NUMBER --repo REPO --comments
+
+# Inline review comments (attached to specific code lines - often the most substantive feedback)
+gh api repos/REPO/pulls/NUMBER/comments \
+  --jq '.[] | {user: .user.login, path: .path, body: .body, created_at: .created_at}'
+```
 
 ### MEDIUM (report one-line summary)
 

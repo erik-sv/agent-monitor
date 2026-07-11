@@ -12,6 +12,13 @@ load_env() {
   if [ -f "$MONITOR_DIR/.env" ]; then
     set -a; source "$MONITOR_DIR/.env"; set +a
   fi
+  # AgentDesk webhook credentials: shared fallback, then per-monitor override
+  if [ -f "$SCRIPT_DIR/.env.agentdesk" ]; then
+    set -a; source "$SCRIPT_DIR/.env.agentdesk"; set +a
+  fi
+  if [ -f "$MONITOR_DIR/.env.agentdesk" ]; then
+    set -a; source "$MONITOR_DIR/.env.agentdesk"; set +a
+  fi
   # Allow claude -p subprocesses when invoked from inside a Claude Code session
   unset CLAUDECODE
 }
@@ -206,7 +213,11 @@ prune_logs() {
 send_agentdesk_webhook() {
   local status="$1"
   local findings_json="${2:-[]}"
-  local source_results="${3:-{}}"
+  # NOT ${3:-{}}: bash closes the expansion at the first unquoted '}', so that
+  # form appends a stray '}' to any provided value ('{}' -> '{}}', invalid JSON)
+  # and every webhook delivery died on jq --argjson under set -e.
+  local source_results="${3:-}"
+  [ -n "$source_results" ] || source_results='{}'
 
   if [ -z "${AGENTDESK_WEBHOOK_URL:-}" ] || [ -z "${AGENTDESK_WEBHOOK_TOKEN:-}" ]; then
     return 0

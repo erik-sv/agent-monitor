@@ -25,13 +25,25 @@ gh pr diff ITEM_NUMBER --repo ITEM_REPO
    - Do NOT review the code or suggest changes. Erik already knows what he wrote.
    - Instead focus on **new external activity**: comments from other reviewers, review
      requests, CI failures, or status changes since the last check.
-   - Read the comments/reviews timeline to identify what others said:
+   - Read BOTH the general comments AND the inline review comments:
      ```bash
+     # General PR/issue comments
      gh ITEM_GH_CMD ITEM_NUMBER --repo ITEM_REPO --comments
+
+     # Inline review comments (attached to specific code lines - critical, often missed)
+     gh api repos/ITEM_REPO/pulls/ITEM_NUMBER/comments \
+       --jq '.[] | {user: .user.login, path: .path, body: .body, created_at: .created_at}'
      ```
+   - Inline review comments are often the most substantive feedback. They contain
+     specific objections, suggested code changes, and line-level critiques. Always fetch them.
    - The recommended action should be about responding to others' feedback, not code changes.
 
-4. If the author is NOT erik-sv, analyze against Erik's active work:
+4. If the author is NOT erik-sv, also read inline review comments for additional context:
+   ```bash
+   gh api repos/ITEM_REPO/pulls/ITEM_NUMBER/comments \
+     --jq '.[] | {user: .user.login, path: .path, body: .body, created_at: .created_at}'
+   ```
+   Then analyze against Erik's active work:
    - Does this change conflict with, support, or depend on any of Erik's active PRs?
    - Does it change the ingredient model, componentOf semantics, validation, or text handling?
    - Are there specific lines or design decisions Erik should weigh in on?
